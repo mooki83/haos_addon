@@ -77,7 +77,6 @@ const CONST = {
     'climate/homenet/heater1-3': { name: 'roomA', unique_id: 'climate-homenet-heater1-3', modes: ['off','heat_cool','heat'], action_topic: '~/action/state', current_temperature_topic: '~/current_temperature/state', mode_state_topic: '~/mode/state', mode_command_topic: '~/mode/command', temperature_state_topic: '~/temperature/state', temperature_command_topic: '~/temperature/command', precision: 1.0 },
     'climate/homenet/heater1-4': { name: 'roomB', unique_id: 'climate-homenet-heater1-4', modes: ['off','heat_cool','heat'], action_topic: '~/action/state', current_temperature_topic: '~/current_temperature/state', mode_state_topic: '~/mode/state', mode_command_topic: '~/mode/command', temperature_state_topic: '~/temperature/state', temperature_command_topic: '~/temperature/command', precision: 1.0 },
 
-
     'binary_sensor/homenet/wallpad': { name: '월패드', unique_id: 'binary_sensor-homenet-wallpad', device_class: 'connectivity', state_topic: '~/connectivity/state' }
   },
 
@@ -407,6 +406,15 @@ const CONST = {
   COMMAND_TOPIC: 'homeassistant/+/homenet/+/+/command', //명령 수신
 
   COMMAND_MAX_RETRY_COUNT: 5
+
+  ,
+  IGNORE_PACKET : [
+    {description : "1st" , buff : 'f7 22 01 18 04 46 10 00 01 15 12 01 16 13 01 15 11 01 14 10 00 00 00 00 00 00 00 00 00 00 00 00 9c'.toBuffer()},
+    {description : "2nd, 5st" , buff : 'f7 0b 01 1b 01 43 11 00 00 b5 ee f7 0d 01 1b 04 43 11 00 04 00 00 b2'.toBuffer()},
+    {description : "3rd, 6st" , buff : 'f7 0e 01 2a 01 40 10 00 19 00 1b 04 85 ee f7 0e 01 2a 04 40 10 00 19 02 1b 04 82'.toBuffer()},
+    {description : "4rd" , buff : 'f7 0b 01 19 01 40 10 00 00 b5 ee f7 0d 01 19 04 40 10 00 01 02 02 b7'.toBuffer()},
+    {description : "7st" , buff : 'f7 0b 01 18 01 46 10 00 00 b2'.toBuffer()}
+  ]
 };
 
 //const EE = Uint8Array.of(0xee);
@@ -493,50 +501,56 @@ parser.on('data', buffer => {
     log('[Socket] Packet Error(Checksum):', buffer.toString('hex', 0, buffer.length-1), buffer.toString('hex', buffer.length-1));
     return;
   }
-  
-  if (buffer[4] == 0x01) {
-    var scheduledRequestFound = CONST.DEVICE_SCHEDULED_REQUEST.find(obj => buffer.length === obj.requestHex.length && obj.requestHex.compare(buffer) === 0 );
-    if (scheduledRequestFound) {
-      //log('[Serial] Scheduled Request Found:', scheduledRequestFound.category);
-      scheduledRequestFound.lastActivity = lastActivity;
-    } else {
-      var unscheduledRequestFound = CONST.DEVICE_UNSCHEDULED_REQUEST.find(obj => buffer.length === obj.requestHex.length && obj.requestHex.compare(buffer) === 0 );
-      if (unscheduledRequestFound) {
-        log('[Socket] Unscheduled Request Found:', unscheduledRequestFound.category);
-      } else {
-        log('[Socket] Unknown Request:', humanizeBuffer(buffer));
-      }
-    }
-  } else if (buffer[4] ==  0x02) {
-    var cmdFound = CONST.DEVICE_COMMAND.find(obj => buffer.length+1 === obj.commandHex.length && obj.commandHex.includes(buffer) );
-    if (cmdFound) {
-      //log('[Serial] Command Found:', CONST.DEVICE_CONFIG[cmdFound.base_topic].name, '->', cmdFound.state, buffer.toString('hex', 0, 7), buffer.toString('hex', 7));
-      updateStatus(cmdFound);
-    } else {
-      log('[Socket] Unknown Command:', humanizeBuffer(buffer));
-    }
-  } else if (buffer[4] ==  0x04) {
-    var stateFound = CONST.DEVICE_STATE.filter(obj => obj.checkState(obj, buffer) );
-    if (stateFound.length !== 0) {
-      stateFound.forEach(function (obj) {
-        //log('[Serial] State Found:', obj.base_topic, obj.stateName, obj.state);
-        updateStatus(obj);
-      });
-    } else {
-      var ackFound = CONST.DEVICE_COMMAND.find(obj => buffer.length === obj.ackHex.length && obj.ackHex.compare(buffer) === 0 );
-      if (ackFound) {
-        var queueFoundIdx = queue.findIndex(obj => obj.commandHex && ackFound.commandHex.length === obj.commandHex.length && obj.commandHex.compare(ackFound.commandHex) === 0 );
-        if(queueFoundIdx > -1) {
-          log('[Socket] Success Command:', CONST.DEVICE_CONFIG[ackFound.base_topic].name, '->', ackFound.state, buffer.toString('hex', 0, 7), buffer.toString('hex', 7));
-          queue.splice(queueFoundIdx, 1);
-        }
-      } else {
-        log('[Socket] Unknown Response:', humanizeBuffer(buffer));
-      }
-    }
+
+  var checkIgnore = CONST.IGNORE_PACKET.find(obj => buffer.length === obj.buff.length && obj.buff.compare(buffer) === 0 );
+  if (checkIgnore) {
+    log('[Socket] Unknown Ignore:', humanizeBuffer(buffer));
   } else {
-    log('[Socket] Unknown Frame:', humanizeBuffer(buffer));
+    if (buffer[4] == 0x01) {
+      var scheduledRequestFound = CONST.DEVICE_SCHEDULED_REQUEST.find(obj => buffer.length === obj.requestHex.length && obj.requestHex.compare(buffer) === 0 );
+      if (scheduledRequestFound) {
+        //log('[Serial] Scheduled Request Found:', scheduledRequestFound.category);
+        scheduledRequestFound.lastActivity = lastActivity;
+      } else {
+        var unscheduledRequestFound = CONST.DEVICE_UNSCHEDULED_REQUEST.find(obj => buffer.length === obj.requestHex.length && obj.requestHex.compare(buffer) === 0 );
+        if (unscheduledRequestFound) {
+          log('[Socket] Unscheduled Request Found:', unscheduledRequestFound.category);
+        } else {
+          log('[Socket] Unknown Request:', humanizeBuffer(buffer));
+        }
+      }
+    } else if (buffer[4] ==  0x02) {
+      var cmdFound = CONST.DEVICE_COMMAND.find(obj => buffer.length+1 === obj.commandHex.length && obj.commandHex.includes(buffer) );
+      if (cmdFound) {
+        //log('[Serial] Command Found:', CONST.DEVICE_CONFIG[cmdFound.base_topic].name, '->', cmdFound.state, buffer.toString('hex', 0, 7), buffer.toString('hex', 7));
+        updateStatus(cmdFound);
+      } else {
+        log('[Socket] Unknown Command:', humanizeBuffer(buffer));
+      }
+    } else if (buffer[4] ==  0x04) {
+      var stateFound = CONST.DEVICE_STATE.filter(obj => obj.checkState(obj, buffer) );
+      if (stateFound.length !== 0) {
+        stateFound.forEach(function (obj) {
+          //log('[Serial] State Found:', obj.base_topic, obj.stateName, obj.state);
+          updateStatus(obj);
+        });
+      } else {
+        var ackFound = CONST.DEVICE_COMMAND.find(obj => buffer.length === obj.ackHex.length && obj.ackHex.compare(buffer) === 0 );
+        if (ackFound) {
+          var queueFoundIdx = queue.findIndex(obj => obj.commandHex && ackFound.commandHex.length === obj.commandHex.length && obj.commandHex.compare(ackFound.commandHex) === 0 );
+          if(queueFoundIdx > -1) {
+            log('[Socket] Success Command:', CONST.DEVICE_CONFIG[ackFound.base_topic].name, '->', ackFound.state, buffer.toString('hex', 0, 7), buffer.toString('hex', 7));
+            queue.splice(queueFoundIdx, 1);
+          }
+        } else {
+          log('[Socket] Unknown Response:', humanizeBuffer(buffer));
+        }
+      }
+    } else {
+      log('[Socket] Unknown Frame:', humanizeBuffer(buffer));
+    }
   }
+  
 });
 
 
