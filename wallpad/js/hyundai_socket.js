@@ -575,7 +575,10 @@ parser.on('data', buffer => {
     } else {
       // Check State
       var stateFound = CONST.DEVICE_FULL_STATE.find(obj => {
-        if ( obj.responseHex.compare(buffer.toString('hex', 0, obj.responseHex.length).toBuffer()) === 0 ) {
+        // if ( obj.responseHex.compare(buffer.toString('hex', 0, obj.responseHex.length).toBuffer()) === 0 ) {
+        // console.log(obj.responseHex.compare(buffer, 0, obj.responseHex.length) === 0)
+        if ( obj.responseHex.compare(buffer, 0, obj.responseHex.length) === 0 ) {
+          // console.log(obj.responseHex);
           return obj;
         }
       });
