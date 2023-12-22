@@ -1,5 +1,6 @@
 ## RELEASE NOTES
 ```txt
+0.92 현대 월패드 기본 정보 업데이트 추가
 0.91 현대 월패드 socket 수정 (buffer 수정)
 0.9 버전 업데이트 및 버그 픽스
 0.8.7 hyundai 월패드 js 파일 업데이트
