@@ -2,6 +2,9 @@
  * Y-City Home Controller
  * @author Daehwan, Kang
  * @since 2018-09-18
+ * 
+ * Hyundai Home Controller
+ * @author Mooki
  */
 
 const util = require('util');
@@ -404,17 +407,48 @@ const CONST = {
   TOPIC_PREFIX: 'homeassistant',
   STATE_TOPIC: 'homeassistant/%s/%s/state', //상태 전달
   COMMAND_TOPIC: 'homeassistant/+/homenet/+/+/command', //명령 수신
-
-  COMMAND_MAX_RETRY_COUNT: 5
-
-  ,
-  IGNORE_PACKET : [
-    {description : "1st" , buff : 'f7 22 01 18 04 46 10 00 01 15 12 01 16 13 01 15 11 01 14 10 00 00 00 00 00 00 00 00 00 00 00 00 9c'.toBuffer()},
-    {description : "2nd, 5st" , buff : 'f7 0b 01 1b 01 43 11 00 00 b5 ee f7 0d 01 1b 04 43 11 00 04 00 00 b2'.toBuffer()},
-    {description : "3rd, 6st" , buff : 'f7 0e 01 2a 01 40 10 00 19 00 1b 04 85 ee f7 0e 01 2a 04 40 10 00 19 02 1b 04 82'.toBuffer()},
-    {description : "4rd" , buff : 'f7 0b 01 19 01 40 10 00 00 b5 ee f7 0d 01 19 04 40 10 00 01 02 02 b7'.toBuffer()},
-    {description : "7st" , buff : 'f7 0b 01 18 01 46 10 00 00 b2'.toBuffer()}
-  ]
+  COMMAND_MAX_RETRY_COUNT: 5,
+  // 전체 상태 체크 Packet
+  DEVICE_FULL_STATE : [
+    { // 전등스위치 19
+      deviceType : "light", requestHex : "f7 0b 01 19 01 40".toBuffer(), responseHex : "f7 0d 01 19 04 40".toBuffer(),
+      deviceList : [
+        {base_topic : "light/homenet/panel1-1", stateIndex : 8},
+        {base_topic : "light/homenet/panel1-2", stateIndex : 9},
+        {base_topic : "light/homenet/panel1-3", stateIndex : 10}
+      ],
+      ackState : [
+        {stateName: 'power', state:  'ON', stateCode: 0x01},
+        {stateName: 'power', state: 'OFF', stateCode: 0x02}
+      ]
+    },
+    { // 난방       18
+      deviceType : "climate", requestHex : "f7 0b 01 18 01 46".toBuffer(), responseHex : "f7 22 01 18 04 46".toBuffer(),
+      deviceList : [
+        {base_topic : "climate/homenet/heater1-1", stateIndex : 8},
+        {base_topic : "climate/homenet/heater1-2", stateIndex : 11},
+        {base_topic : "climate/homenet/heater1-3", stateIndex : 14},
+        {base_topic : "climate/homenet/heater1-4", stateIndex : 17}
+      ]
+    },
+    { // 가스벨브   1b
+      deviceType : "breaker", requestHex : "f7 0b 01 1b 01 43".toBuffer(), responseHex : "f7 0d 01 1b 04 43".toBuffer(),
+      deviceList : []
+    },
+    { // 외출차단기 2a f70e01 2a 01 40
+      deviceType : "breaker2", requestHex : "f7 0e 01 2a 01 40".toBuffer(), responseHex : "f7 0e 01 2a 04 40".toBuffer(),
+      deviceList : []
+    }
+  ],
+  DEVICE_STATE_ENUM : {
+    light : [],
+    climate : {
+      action : [
+        {stateName: "action", stateCode : 0x01, state : "heat"},
+        {stateName: "action", stateCode : 0x04, state : "idle"}
+      ]
+    }
+  }
 };
 
 //const EE = Uint8Array.of(0xee);
@@ -485,7 +519,6 @@ sock.connect(CONFIG.socket.port, CONFIG.socket.deviceIP, function() {
 }); 
 const parser = sock.pipe(new Delimiter({ delimiter: new Buffer.from([0xee]) }));   
 
-
 // SerialPort에서 데이터 수신
 parser.on('data', buffer => {
   //log('[Serial] Packet:', buffer.toString('hex'), '(Receive interval:', (new Date().getTime())-lastActivity, 'ms)' );
@@ -502,11 +535,15 @@ parser.on('data', buffer => {
     return;
   }
 
-  var checkIgnore = CONST.IGNORE_PACKET.find(obj => buffer.length === obj.buff.length && obj.buff.compare(buffer) === 0 );
-  if (checkIgnore) {
-    log('[Socket] Unknown Ignore:', humanizeBuffer(buffer));
-  } else {
-    if (buffer[4] == 0x01) {
+  if (buffer[4] == 0x01) {
+    var stateFound = CONST.DEVICE_FULL_STATE.find(obj => {
+      if ( obj.requestHex.compare(buffer.toString('hex', 0, obj.requestHex.length).toBuffer()) === 0 ) {
+        return obj;
+      }
+    });
+    if (stateFound) {
+      // console.log('[Socket] Request:', stateFound.deviceType, humanizeBuffer(buffer));
+    } else {
       var scheduledRequestFound = CONST.DEVICE_SCHEDULED_REQUEST.find(obj => buffer.length === obj.requestHex.length && obj.requestHex.compare(buffer) === 0 );
       if (scheduledRequestFound) {
         //log('[Serial] Scheduled Request Found:', scheduledRequestFound.category);
@@ -519,21 +556,62 @@ parser.on('data', buffer => {
           log('[Socket] Unknown Request:', humanizeBuffer(buffer));
         }
       }
-    } else if (buffer[4] ==  0x02) {
-      var cmdFound = CONST.DEVICE_COMMAND.find(obj => buffer.length+1 === obj.commandHex.length && obj.commandHex.includes(buffer) );
-      if (cmdFound) {
-        //log('[Serial] Command Found:', CONST.DEVICE_CONFIG[cmdFound.base_topic].name, '->', cmdFound.state, buffer.toString('hex', 0, 7), buffer.toString('hex', 7));
-        updateStatus(cmdFound);
-      } else {
-        log('[Socket] Unknown Command:', humanizeBuffer(buffer));
-      }
-    } else if (buffer[4] ==  0x04) {
-      var stateFound = CONST.DEVICE_STATE.filter(obj => obj.checkState(obj, buffer) );
-      if (stateFound.length !== 0) {
-        stateFound.forEach(function (obj) {
-          //log('[Serial] State Found:', obj.base_topic, obj.stateName, obj.state);
-          updateStatus(obj);
-        });
+    }
+  } else if (buffer[4] ==  0x02) {
+    var cmdFound = CONST.DEVICE_COMMAND.find(obj => buffer.length+1 === obj.commandHex.length && obj.commandHex.includes(buffer) );
+    if (cmdFound) {
+      //log('[Serial] Command Found:', CONST.DEVICE_CONFIG[cmdFound.base_topic].name, '->', cmdFound.state, buffer.toString('hex', 0, 7), buffer.toString('hex', 7));
+      updateStatus(cmdFound);
+    } else {
+      log('[Socket] Unknown Command:', humanizeBuffer(buffer));
+    }
+  } else if (buffer[4] ==  0x04) {
+    var stateFound = CONST.DEVICE_STATE.filter(obj => obj.checkState(obj, buffer) );
+    if (stateFound.length !== 0) {
+      stateFound.forEach(function (obj) {
+        //log('[Serial] State Found:', obj.base_topic, obj.stateName, obj.state);
+        updateStatus(obj);
+      });
+    } else {
+      // Check State
+      var stateFound = CONST.DEVICE_FULL_STATE.find(obj => {
+        if ( obj.responseHex.compare(buffer.toString('hex', 0, obj.responseHex.length).toBuffer()) === 0 ) {
+          return obj;
+        }
+      });
+      if (stateFound) {
+        // console.log('[Socket] Response : ', stateFound.deviceType, humanizeBuffer(buffer));
+        if ( stateFound.deviceList.length > 0 ) {
+          stateFound.deviceList.forEach(obj => {
+            if ( stateFound.ackState !== undefined ) {
+              var stateObj = stateFound.ackState.find(o => {
+                if ( o.stateCode === buffer[obj.stateIndex] ) {
+                  var tmp = {};
+                  Object.assign(tmp, {base_topic:obj.base_topic}, o);
+                  return tmp;
+                }
+              });
+              if (stateObj) {
+                var updateObj = {};
+                Object.assign(updateObj, {base_topic : obj.base_topic}, stateObj);
+                updateStatus(updateObj);
+              }
+            } else if ( stateFound.deviceType === 'climate' ) {
+              var currentActionState = CONST.DEVICE_STATE_ENUM.climate.action.find(o => {
+                if (o.stateCode === buffer[obj.stateIndex]) {
+                  return o;
+                }
+              });
+              var updateObj = {};
+              Object.assign(updateObj, {base_topic:obj.base_topic}, currentActionState)
+              updateStatus(updateObj);
+              updateStatus({base_topic:obj.base_topic, stateName: 'current_temperature', state: buffer[obj.stateIndex + 1]});
+              updateStatus({base_topic:obj.base_topic, stateName: 'temperature', state: buffer[obj.stateIndex + 2]});
+            }
+          })
+        } else {
+
+        }
       } else {
         var ackFound = CONST.DEVICE_COMMAND.find(obj => buffer.length === obj.ackHex.length && obj.ackHex.compare(buffer) === 0 );
         if (ackFound) {
@@ -546,9 +624,9 @@ parser.on('data', buffer => {
           log('[Socket] Unknown Response:', humanizeBuffer(buffer));
         }
       }
-    } else {
-      log('[Socket] Unknown Frame:', humanizeBuffer(buffer));
     }
+  } else {
+    log('[Socket] Unknown Frame:', humanizeBuffer(buffer));
   }
   
 });
